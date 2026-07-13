@@ -46,7 +46,7 @@ CREATE TABLE IF NOT EXISTS movies (
     resolution TEXT
 )""")
 
-# Sozlamalar jadvali (Karta raqami uchun)
+# Sozlamalar jadvali
 cursor.execute("""
 CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
@@ -57,7 +57,7 @@ CREATE TABLE IF NOT EXISTS settings (
 cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('card_number', 'Karta raqami kiritilmagan')")
 conn.commit()
 
-# Eski bazalarda last_seen va gift_received ustunlari bo'lmasa, ularni qo'shish (Xatolik olmaslik uchun)
+# Eski bazalarda ustunlar bo'lmasa, ularni qo'shish
 try:
     cursor.execute("ALTER TABLE users ADD COLUMN last_seen TEXT")
     conn.commit()
@@ -79,6 +79,9 @@ class MovieUpload(StatesGroup):
     resolution = State()
     video = State()
 
+class AdminAd(StatesGroup):
+    waiting_for_ad = State()
+
 # --- YORDAMCHI FUNKSIYALAR ---
 def check_vip(user_id):
     cursor.execute("SELECT vip_until FROM users WHERE user_id = ?", (user_id,))
@@ -98,7 +101,6 @@ async def is_subscribed(user_id):
         return False
 
 def touch_user(user_id):
-    """Foydalanuvchini bazada borligini tekshiradi va oxirgi faollik vaqtini yangilaydi"""
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     cursor.execute("SELECT user_id FROM users WHERE user_id = ?", (user_id,))
     if cursor.fetchone():
@@ -139,14 +141,13 @@ def get_card_number():
     res = cursor.fetchone()
     return res[0] if res else "Karta raqami kiritilmagan"
 
-# --- MAJBURIY OBUNA PANEL ---
+# --- KEYBOARDS ---
 def subscription_keyboard():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="Kanalga a'zo bo'lish", url=CHANNEL_URL)],
         [InlineKeyboardButton(text="Tekshirish", callback_data="check_sub")]
     ])
 
-# --- TARIFLAR KEYBOARD ---
 def vip_keyboard():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="1 kun - 2 000 so'm", callback_data="vip_1")],
@@ -162,13 +163,11 @@ async def start_cmd(message: types.Message):
     user_id = message.from_user.id
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     
-    # Foydalanuvchini tekshirish yoki yaratish
     cursor.execute("SELECT gift_received FROM users WHERE user_id = ?", (user_id,))
     res = cursor.fetchone()
     
     gift_msg = ""
     if not res:
-        # Mutlaqo yangi foydalanuvchi -> 1 oylik bepul VIP beriladi
         expire_date = (datetime.now() + timedelta(days=30)).strftime("%Y-%m-%d %H:%M:%S")
         cursor.execute(
             "INSERT INTO users (user_id, last_seen, vip_until, gift_received) VALUES (?, ?, ?, 1)",
@@ -177,7 +176,6 @@ async def start_cmd(message: types.Message):
         conn.commit()
         gift_msg = "🎁 **Sizga birinchi marta kirganingiz uchun 1 oylik BEPUL VIP status berildi!** Endi 1 oy davomida kinolarni limitsiz yuklab olishingiz mumkin.\n\n"
     else:
-        # Eski foydalanuvchi bo'lsa faqat vaqtini yangilaymiz
         cursor.execute("UPDATE users SET last_seen = ? WHERE user_id = ?", (now_str, user_id))
         conn.commit()
 
@@ -188,7 +186,7 @@ async def start_cmd(message: types.Message):
     msg = (f"{gift_msg}Xush kelibsiz! Kino kodini yuboring.\n\n"
            "Tariflar haqida ma'lumot olish uchun /vip buyrug'ini yozing.")
     if user_id == ADMIN_ID:
-        msg += "\n\n🛠 **Admin buyruqlari:**\nKino yuklash: /add_kino\nVIP berish: /give_vip ID KUN\nAdmin Panel (Statistika): /panel\nKarta o'zgartirish: /set_card KARTA"
+        msg += "\n\n🛠 **Admin buyruqlari:**\nKino yuklash: /add_kino\nVIP berish: /give_vip ID KUN\nAdmin Panel: /panel\nKarta o'zgartirish: /set_card KARTA\nReklama yuborish: /reklama"
     await message.answer(msg)
 
 @dp.callback_query(F.data == "check_sub")
@@ -243,8 +241,8 @@ async def pay_send_callback(callback: types.CallbackQuery):
     try:
         await bot.send_message(chat_id=ADMIN_ID, text=admin_text, reply_markup=admin_keyboard, parse_mode="Markdown")
         await callback.message.answer("✅ To'lov so'rovingiz adminga yuborildi. Admin tekshirib tez orada VIP statusingizni faollashtiradi.")
-    except Exception as e:
-        await callback.message.answer("❌ So'rov yuborishda xatolik yuz berdi. Keyinroq qayta urining.")
+    except Exception:
+        await callback.message.answer("❌ So'rov yuborishda xatolik yuz berdi.")
     
     await callback.message.delete()
     await callback.answer()
@@ -259,24 +257,17 @@ async def pay_cancel_callback(callback: types.CallbackQuery):
 async def admin_accept_callback(callback: types.CallbackQuery):
     if callback.from_user.id != ADMIN_ID:
         return
-    
     parts = callback.data.split("_")
     user_id = int(parts[2])
     days = int(parts[3])
     
     expire_date = (datetime.now() + timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
-    
-    cursor.execute("SELECT user_id FROM users WHERE user_id = ?", (user_id,))
-    if cursor.fetchone():
-        cursor.execute("UPDATE users SET vip_until = ? WHERE user_id = ?", (expire_date, user_id))
-    else:
-        cursor.execute("INSERT INTO users (user_id, vip_until) VALUES (?, ?)", (user_id, expire_date))
+    cursor.execute("UPDATE users SET vip_until = ? WHERE user_id = ?", (expire_date, user_id))
     conn.commit()
     
-    await callback.message.edit_text(f"✅ Foydalanuvchi {user_id} uchun {days} kunlik VIP muvaffaqiyatli berildi!")
-    
+    await callback.message.edit_text(f"✅ Foydalanuvchi {user_id} uchun {days} kunlik VIP berildi!")
     try:
-        await bot.send_message(chat_id=user_id, text=f"🎉 Tabriklaymiz! To'lovingiz tasdiqlandi. Admin sizga {days} kunlik VIP status berdi. Endi kinolarni limitsiz yuklab olishingiz mumkin!")
+        await bot.send_message(chat_id=user_id, text=f"🎉 Tabriklaymiz! To'lovingiz tasdiqlandi. Admin sizga {days} kunlik VIP status berdi.")
     except Exception:
         pass
     await callback.answer()
@@ -286,70 +277,79 @@ async def admin_reject_callback(callback: types.CallbackQuery):
     if callback.from_user.id != ADMIN_ID:
         return
     user_id = int(callback.data.split("_")[2])
-    
     await callback.message.edit_text(f"❌ Foydalanuvchi {user_id} ning so'rovi rad etildi.")
     try:
-        await bot.send_message(chat_id=user_id, text="❌ To'lov so'rovingiz admin tomonidan rad etildi. Agar xatolik bo'lgan bo'lsa admin bilan bog'laning.")
+        await bot.send_message(chat_id=user_id, text="❌ To'lov so'rovingiz admin tomonidan rad etildi.")
     except Exception:
         pass
     await callback.answer()
 
-# --- ADMIN PANEL BUYRUQLARI ---
+# --- ADMIN PANEL & REKLAMA TIZIMI ---
 
 @dp.message(Command("panel"), F.from_user.id == ADMIN_ID)
 async def admin_panel_cmd(message: types.Message):
     cursor.execute("SELECT COUNT(user_id) FROM users")
     total_users = cursor.fetchone()[0]
-    
     card = get_card_number()
     
     text = (f"📊 **Bot Statistikasi va Admin Panel**\n\n"
-            f"👥 Bazadagi jami foydalanuvchilar (ID'lar): `{total_users}` ta\n"
+            f"👥 Bazadagi jami foydalanuvchilar: `{total_users}` ta\n"
             f"💳 Hozirgi karta raqami: `{card}`\n\n"
-            f"Kartani o'zgartirish uchun buyruq: `/set_card KARTA_RAQAMI`")
+            f"Reklama yuborish uchun buyruq: `/reklama`")
     await message.answer(text, parse_mode="Markdown")
 
 @dp.message(Command("set_card"), F.from_user.id == ADMIN_ID)
 async def set_card_cmd(message: types.Message):
     args = message.text.split(maxsplit=1)
     if len(args) < 2:
-        await message.answer("❌ Xato format. Misol: `/set_card 8600123456789012`", parse_mode="Markdown")
+        await message.answer("❌ Xato format. Misol: `/set_card 8600123456789012`")
         return
-    
     new_card = args[1].strip()
     cursor.execute("UPDATE settings SET value = ? WHERE key = 'card_number'", (new_card,))
     conn.commit()
+    await message.answer(f"✅ Karta raqami muvaffaqiyatli o'zgartirildi:\n`{new_card}`", parse_mode="Markdown")
+
+@dp.message(Command("reklama"), F.from_user.id == ADMIN_ID)
+async def start_ad(message: types.Message, state: FSMContext):
+    await message.answer("📝 Reklama xabarini yuboring (Matn, Rasm, Video yoki ixtiyoriy formatda):")
+    await state.set_state(AdminAd.waiting_for_ad)
+
+@dp.message(AdminAd.waiting_for_ad, F.from_user.id == ADMIN_ID)
+async def send_ad_to_all(message: types.Message, state: FSMContext):
+    await state.clear()
+    await message.answer("⏳ Reklama tarqatilmoqda, kuting...")
     
-    await message.answer(f"✅ VIP to'lovlari uchun karta raqami muvaffaqiyatli o'zgartirildi:\n`{new_card}`", parse_mode="Markdown")
+    cursor.execute("SELECT user_id FROM users")
+    users = cursor.fetchall()
+    
+    success = 0
+    failed = 0
+    
+    for user in users:
+        try:
+            await message.copy_to(chat_id=user[0])
+            success += 1
+            await asyncio.sleep(0.05)  # Telegram limitlariga tushmaslik uchun
+        except Exception:
+            failed += 1
+            
+    await message.answer(f"📢 **Reklama tarqatish yakunlandi!**\n\n✅ Muvaffaqiyatli: {success} ta\n❌ Bloklagan/Xato: {failed} ta")
 
 @dp.message(Command("give_vip"), F.from_user.id == ADMIN_ID)
 async def give_vip_cmd(message: types.Message):
     try:
         args = message.text.split()
         if len(args) != 3:
-            await message.answer("❌ Xato format!\nTo'g'ri format: `/give_vip USER_ID KUN`", parse_mode="Markdown")
+            await message.answer("❌ Xato format! Format: `/give_vip USER_ID KUN`")
             return
-        
         user_id = int(args[1])
         days = int(args[2])
         expire_date = (datetime.now() + timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
-        
-        cursor.execute("SELECT user_id FROM users WHERE user_id = ?", (user_id,))
-        res = cursor.fetchone()
-        
-        if res:
-            cursor.execute("UPDATE users SET vip_until = ? WHERE user_id = ?", (expire_date, user_id))
-        else:
-            cursor.execute("INSERT INTO users (user_id, vip_until) VALUES (?, ?)", (user_id, expire_date))
+        cursor.execute("UPDATE users SET vip_until = ? WHERE user_id = ?", (expire_date, user_id))
         conn.commit()
-        
-        await message.answer(f"✅ Foydalanuvchi {user_id} muvaffaqiyatli VIP qilindi!\n📅 Muddat: {days} kun.")
-        try:
-            await bot.send_message(chat_id=user_id, text=f"🎉 Tabriklaymiz! Admin sizga {days} kunlik VIP status berdi.")
-        except Exception:
-            pass
-    except ValueError:
-        await message.answer("❌ Xatolik: ID va Kun faqat raqamlardan iborat bo'lishi kerak!")
+        await message.answer(f"✅ Foydalanuvchi {user_id} muvaffaqiyatli VIP qilindi!")
+    except Exception as e:
+        await message.answer(f"❌ Xatolik: {str(e)}")
 
 # --- ADMIN PANEL (KINO YUKLASH) ---
 @dp.message(Command("add_kino"), F.from_user.id == ADMIN_ID)
@@ -360,7 +360,7 @@ async def add_kino_start(message: types.Message, state: FSMContext):
 @dp.message(MovieUpload.name, F.from_user.id == ADMIN_ID)
 async def process_name(message: types.Message, state: FSMContext):
     await state.update_data(name=message.text)
-    await message.answer("2-bosqich: Kino uchun kod belgilang (faqat raqam yoki matn):")
+    await message.answer("2-bosqich: Kino uchun kod belgilang:")
     await state.set_state(MovieUpload.code)
 
 @dp.message(MovieUpload.code, F.from_user.id == ADMIN_ID)
@@ -391,7 +391,6 @@ async def process_resolution(message: types.Message, state: FSMContext):
 async def process_video(message: types.Message, state: FSMContext):
     file_id = message.video.file_id if message.video else message.document.file_id
     data = await state.get_data()
-    
     try:
         cursor.execute(
             "INSERT INTO movies (code, file_id, name, country, lang, resolution) VALUES (?, ?, ?, ?, ?, ?)",
@@ -400,7 +399,7 @@ async def process_video(message: types.Message, state: FSMContext):
         conn.commit()
         await message.answer(f"Kino muvaffaqiyatli saqlandi!\n\nKod: {data['code']}\nNomi: {data['name']}")
     except sqlite3.IntegrityError:
-        await message.answer("Xatolik: Bu kod bilan avval kino saqlangan. Boshqa kod yordamida qaytadan urining: /add_kino")
+        await message.answer("Xatolik: Bu kod bilan avval kino saqlangan. Qayta urining: /add_kino")
     await state.clear()
 
 # --- KINO QIDIRISH VA YUBORISH ---
@@ -426,7 +425,6 @@ async def search_movie(message: types.Message):
                    f"🌐 **Til:** {lang}\n"
                    f"🖥 **Tiniqlik:** {resolution}\n"
                    f"🔑 **Kod:** {code}")
-        
         await bot.send_video(chat_id=message.chat.id, video=file_id, caption=caption, parse_mode="Markdown")
     else:
         await message.answer("Bu kod bilan kino topilmadi. Kodni to'g'ri yozganingizni tekshiring.")
@@ -457,7 +455,7 @@ async def periodic_reminder():
         except Exception as e:
             print(f"Eslatma tizimida xatolik: {e}")
             
-        await asyncio.sleep(1800) # Har 30 daqiqada bir tekshiradi
+        await asyncio.sleep(1800)
 
 async def main():
     port = int(os.environ.get("PORT", 8080))
@@ -470,9 +468,7 @@ async def main():
     await site.start()
 
     print("Bot Render-da muvaffaqiyatli ishga tushdi...")
-    
     asyncio.create_task(periodic_reminder())
-    
     await dp.start_polling(bot)
 
 if __name__ == '__main__':
