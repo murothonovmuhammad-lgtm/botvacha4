@@ -130,7 +130,8 @@ def check_limit_and_update(user_id):
         conn.commit()
         return True
     else:
-        if daily_count < 2:
+        # Kunlik limit 6 taga o'zgartirildi
+        if daily_count < 6:
             cursor.execute("UPDATE users SET daily_count = daily_count + 1 WHERE user_id = ?", (user_id,))
             conn.commit()
             return True
@@ -164,23 +165,20 @@ async def start_cmd(message: types.Message):
     user_id = message.from_user.id
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     
-    # Bazada bu foydalanuvchi bor-yo'qligini va sovg'a olganini tekshirish
     cursor.execute("SELECT gift_received FROM users WHERE user_id = ?", (user_id,))
     res = cursor.fetchone()
     
     gift_msg = ""
     
-    # Agar foydalanuvchi bazada umuman yo'q bo'lsa yoki sovg'ani hali olmagan bo'lsa (0 bo'lsa)
+    # 1 marta 1 oylik tekin VIP berish tizimi
     if not res or res[0] == 0:
         expire_date = (datetime.now() + timedelta(days=30)).strftime("%Y-%m-%d %H:%M:%S")
         if not res:
-            # Yangi foydalanuvchini bazaga qo'shish va 1 oylik VIP berish
             cursor.execute(
                 "INSERT INTO users (user_id, last_seen, vip_until, gift_received) VALUES (?, ?, ?, 1)",
                 (user_id, now_str, expire_date)
             )
         else:
-            # Foydalanuvchi bazada boru, lekin gift olmagan bo'lsa yangilash
             cursor.execute(
                 "UPDATE users SET last_seen = ?, vip_until = ?, gift_received = 1 WHERE user_id = ?",
                 (now_str, expire_date, user_id)
@@ -188,7 +186,6 @@ async def start_cmd(message: types.Message):
         conn.commit()
         gift_msg = "🎁 **Sizga birinchi marta kirganingiz uchun 1 oylik BEPUL VIP status berildi!** Endi 1 oy davomida kinolarni limitsiz yuklab olishingiz mumkin.\n\n"
     else:
-        # Agar sovg'ani allaqachon olgan bo'lsa, faqat ko'rilgan vaqtini yangilaymiz, VIP muddatiga tegmaymiz
         cursor.execute("UPDATE users SET last_seen = ? WHERE user_id = ?", (now_str, user_id))
         conn.commit()
 
@@ -429,7 +426,8 @@ async def search_movie(message: types.Message):
     
     if movie:
         if not check_limit_and_update(message.from_user.id):
-            await message.answer("Kunlik 2 ta kino yuklash limitiz tugadi. Cheksiz yuklash uchun /vip tarifini sotib oling.")
+            # Ogohlantirish matnida ham 6 ta limit deb o'zgartirildi
+            await message.answer("Kunlik 6 ta kino yuklash limitiz tugadi. Cheksiz yuklash uchun /vip tarifini sotib oling.")
             return
         
         file_id, name, country, lang, resolution = movie
