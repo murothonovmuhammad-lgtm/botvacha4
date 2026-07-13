@@ -57,7 +57,7 @@ CREATE TABLE IF NOT EXISTS settings (
 cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('card_number', 'Karta raqami kiritilmagan')")
 conn.commit()
 
-# Eski bazalarda ustunlar bo'lmasa, ularni qo'shish
+# Eski bazalarda ustunlar bo'lmasa, ularni qo'shish (Xatolik oldini olish)
 try:
     cursor.execute("ALTER TABLE users ADD COLUMN last_seen TEXT")
     conn.commit()
@@ -101,6 +101,7 @@ async def is_subscribed(user_id):
         return False
 
 def touch_user(user_id):
+    """Foydalanuvchining oxirgi faollik vaqtini yangilaydi"""
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     cursor.execute("SELECT user_id FROM users WHERE user_id = ?", (user_id,))
     if cursor.fetchone():
@@ -163,19 +164,31 @@ async def start_cmd(message: types.Message):
     user_id = message.from_user.id
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     
+    # Bazada bu foydalanuvchi bor-yo'qligini va sovg'a olganini tekshirish
     cursor.execute("SELECT gift_received FROM users WHERE user_id = ?", (user_id,))
     res = cursor.fetchone()
     
     gift_msg = ""
-    if not res:
+    
+    # Agar foydalanuvchi bazada umuman yo'q bo'lsa yoki sovg'ani hali olmagan bo'lsa (0 bo'lsa)
+    if not res or res[0] == 0:
         expire_date = (datetime.now() + timedelta(days=30)).strftime("%Y-%m-%d %H:%M:%S")
-        cursor.execute(
-            "INSERT INTO users (user_id, last_seen, vip_until, gift_received) VALUES (?, ?, ?, 1)",
-            (user_id, now_str, expire_date)
-        )
+        if not res:
+            # Yangi foydalanuvchini bazaga qo'shish va 1 oylik VIP berish
+            cursor.execute(
+                "INSERT INTO users (user_id, last_seen, vip_until, gift_received) VALUES (?, ?, ?, 1)",
+                (user_id, now_str, expire_date)
+            )
+        else:
+            # Foydalanuvchi bazada boru, lekin gift olmagan bo'lsa yangilash
+            cursor.execute(
+                "UPDATE users SET last_seen = ?, vip_until = ?, gift_received = 1 WHERE user_id = ?",
+                (now_str, expire_date, user_id)
+            )
         conn.commit()
         gift_msg = "🎁 **Sizga birinchi marta kirganingiz uchun 1 oylik BEPUL VIP status berildi!** Endi 1 oy davomida kinolarni limitsiz yuklab olishingiz mumkin.\n\n"
     else:
+        # Agar sovg'ani allaqachon olgan bo'lsa, faqat ko'rilgan vaqtini yangilaymiz, VIP muddatiga tegmaymiz
         cursor.execute("UPDATE users SET last_seen = ? WHERE user_id = ?", (now_str, user_id))
         conn.commit()
 
@@ -329,7 +342,7 @@ async def send_ad_to_all(message: types.Message, state: FSMContext):
         try:
             await message.copy_to(chat_id=user[0])
             success += 1
-            await asyncio.sleep(0.05)  # Telegram limitlariga tushmaslik uchun
+            await asyncio.sleep(0.05)
         except Exception:
             failed += 1
             
@@ -433,7 +446,7 @@ async def search_movie(message: types.Message):
 async def handle(request):
     return web.Response(text="Bot is running successfully!")
 
-# --- 72 SOATDA BIR ENLATMA BERUVCHI FON VAZIFASI ---
+# --- 72 SOATDA BIR ESALATMA BERUVCHI FON VAZIFASI ---
 async def periodic_reminder():
     while True:
         try:
