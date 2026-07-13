@@ -11,7 +11,7 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from aiohttp import web
 
 # --- KONFIGURATSIYA ---
-BOT_TOKEN = "8643222844:AAGrDiW9axIOXrNvnRNhn6vCL5Lo4V8xYas"
+BOT_TOKEN = "8855828283:AAHBhbNOkgq6AWVnGp4r4XP6Nmo3fPco9O0"
 ADMIN_ID = 8809803548  # O'zingizning Telegram ID'ngizni yozing
 
 REQUIRED_CHANNEL = "-1003933617682"
